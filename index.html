@@ -161,7 +161,8 @@
 
 <header>
   <h1>Washoe County Fire Risk Lookup</h1>
-  <p class="sub">Type an address to see its wildfire hazard designation and nearby fire history. Built on Washoe County's own Fire Risk Rating data and the National Interagency Fire Center's live perimeter service.</p>
+  <p class="sub">Type an address to see its wildfire hazard designation and nearby fire history.</p>
+  <p style="font-size:12px; color:var(--muted); margin:-12px 0 18px; line-height:1.4;">Address search covers Washoe County only. The map itself also shows wildfire hazard statewide as a visual layer, built on Washoe County's own Fire Risk Rating data, the U.S. Forest Service's national Wildfire Hazard Potential layer, and NIFC's live fire perimeter service.</p>
   <div class="searchbar">
     <input id="addr" type="text" placeholder="e.g. 5000 Cold Springs Rd, Reno, NV" />
     <button id="go">Look up</button>
@@ -173,16 +174,25 @@
   <div id="map"></div>
   <div class="side">
     <h2>Layers</h2>
-    <label class="toggle-row"><input type="checkbox" id="toggleHazard" checked> Fire Risk Rating</label>
+    <label class="toggle-row"><input type="checkbox" id="toggleHazard" checked> Fire Risk Rating (Washoe)</label>
+    <label class="toggle-row"><input type="checkbox" id="toggleNational"> Wildfire Hazard Potential (national)</label>
+    <div style="font-size:11.5px; color:var(--muted); margin:-4px 0 10px 23px; line-height:1.4;">USFS layer, covers every county — visual reference only, not wired into address search.</div>
     <label class="toggle-row"><input type="checkbox" id="togglePerimeters" checked> Current fire perimeters</label>
     <label class="toggle-row"><input type="checkbox" id="toggleHistory"> Historical fire perimeters</label>
-    <div style="font-size:11.5px; color:var(--muted); margin:-4px 0 10px 23px; line-height:1.4;">Loads on first check &mdash; covers past decades, may take a moment.</div>
+    <div style="font-size:11.5px; color:var(--muted); margin:-4px 0 10px 23px; line-height:1.4;">Loads on first check — covers past decades, may take a moment.</div>
 
     <h2 style="margin-top:18px;">Legend</h2>
-    <div class="legend-item"><span class="swatch" style="background:var(--very-high)"></span> Extreme hazard</div>
-    <div class="legend-item"><span class="swatch" style="background:var(--high)"></span> High hazard</div>
-    <div class="legend-item"><span class="swatch" style="background:var(--moderate)"></span> Moderate hazard</div>
-    <div class="legend-item"><span class="swatch" style="background:var(--low)"></span> Low hazard</div>
+    <div id="washoeLegend">
+      <div style="font-size:12px; font-weight:600; color:var(--ink); margin-bottom:6px;">Washoe County</div>
+      <div class="legend-item"><span class="swatch" style="background:var(--very-high)"></span> Extreme</div>
+      <div class="legend-item"><span class="swatch" style="background:var(--high)"></span> High</div>
+      <div class="legend-item"><span class="swatch" style="background:var(--moderate)"></span> Moderate</div>
+      <div class="legend-item"><span class="swatch" style="background:var(--low)"></span> Low</div>
+    </div>
+    <div id="nationalLegendBlock" style="display:none;">
+      <div style="font-size:12px; font-weight:600; color:var(--ink); margin:10px 0 6px;">National (USFS)</div>
+      <div id="nationalLegend"></div>
+    </div>
     <div class="legend-item"><span class="swatch" style="background:#c1502e; border-color:#c1502e"></span> Current fire perimeter</div>
     <div class="legend-item"><span class="swatch" style="background:#5b4636; border-color:#5b4636"></span> Historical fire perimeter</div>
     <div id="layerWarning" style="display:none; margin-top:14px; padding:10px; background:#f4d9d0; border:1px solid var(--accent-dark); font-size:12px; color:var(--accent-dark); line-height:1.4;">
@@ -195,7 +205,7 @@
     </div>
 
     <div class="note">
-      <b>Live data.</b> Fire Risk Rating comes directly from Washoe County's own GIS server (layer ID 96, "Fire Risk Rating," under Accela/AccelaWashoe). Fire perimeters are pulled live from NIFC/WFIGS. No sample or placeholder data remains in this version.
+      <b>Live data.</b> Fire Risk Rating comes directly from Washoe County's own GIS server (layer ID 96, "Fire Risk Rating," under Accela/AccelaWashoe) and covers only Washoe County addresses. Wildfire Hazard Potential is the U.S. Forest Service's national layer (2024 edition) — shown as a visual reference for the rest of the state, but not wired into the address search since its values aren't meant for exact point lookups. Fire perimeters are pulled live from NIFC/WFIGS.
     </div>
   </div>
 </div>
@@ -221,7 +231,9 @@
     'Extreme': '#b3271e',
     'High': '#e08a2b',
     'Moderate': '#e8c547',
-    'Low': '#8faa7c'
+    'Low': '#8faa7c',
+    'Very High': '#b3271e',
+    'Very Low': '#8faa7c'
   };
 
   // ---- Generic JSONP helper ----
@@ -285,6 +297,55 @@
     document.getElementById('layerWarning').style.display = 'block';
   });
 
+  // ---- National Wildfire Hazard Potential (USFS, raster layer) ----
+  // This is pixel/image data, not shapes like Washoe's layer, so it's rendered
+  // as a live image overlay that refreshes to match the current map view,
+  // rather than drawn feature-by-feature.
+  const NATIONAL_WHP_URL = "https://imagery.geoplatform.gov/iipp/rest/services/Fire_Aviation/USFS_EDW_RMRS_WRC_WildfireHazardPotential/ImageServer/exportImage";
+  let nationalOverlay = null;
+
+  function refreshNationalLayer() {
+    if (!document.getElementById('toggleNational').checked) return;
+    const b = map.getBounds();
+    const size = map.getSize();
+    const params = new URLSearchParams({
+      bbox: `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`,
+      bboxSR: '4326',
+      imageSR: '4326',
+      size: `${size.x},${size.y}`,
+      format: 'png32',
+      transparent: 'true',
+      f: 'image'
+    });
+    const url = `${NATIONAL_WHP_URL}?${params.toString()}`;
+    if (nationalOverlay) map.removeLayer(nationalOverlay);
+    nationalOverlay = L.imageOverlay(url, b, { opacity: 0.55 }).addTo(map);
+  }
+
+  document.getElementById('toggleNational').addEventListener('change', e => {
+    if (e.target.checked) {
+      refreshNationalLayer();
+      map.on('moveend', refreshNationalLayer);
+    } else {
+      if (nationalOverlay) map.removeLayer(nationalOverlay);
+      map.off('moveend', refreshNationalLayer);
+    }
+    document.getElementById('nationalLegendBlock').style.display = e.target.checked ? 'block' : 'none';
+  });
+
+  // ---- Real legend for the national layer, pulled from the source itself ----
+  esriJsonp(NATIONAL_WHP_URL.replace('/exportImage', '/legend'), {}).then(data => {
+    const layer = data.layers && data.layers[0];
+    if (!layer || !layer.legend) return;
+    const container = document.getElementById('nationalLegend');
+    layer.legend.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'legend-item';
+      row.innerHTML = `<img src="data:${item.contentType};base64,${item.imageData}" width="16" height="16" style="border:1px solid rgba(0,0,0,0.3);"> ${item.label}`;
+      container.appendChild(row);
+    });
+  }).catch(err => console.error('Could not load national legend:', err));
+
   // ---- Live NIFC fire perimeters (real public data) ----
   const perimeterLayerGroup = L.layerGroup().addTo(map);
   const NIFC_URL = "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Interagency_Perimeters_Current/FeatureServer/0/query";
@@ -317,6 +378,7 @@
   // ---- Layer toggles ----
   document.getElementById('toggleHazard').addEventListener('change', e => {
     if (e.target.checked) { washoeLayerGroup.addTo(map); } else { map.removeLayer(washoeLayerGroup); }
+    document.getElementById('washoeLegend').style.display = e.target.checked ? 'block' : 'none';
   });
   document.getElementById('togglePerimeters').addEventListener('change', e => {
     if (e.target.checked) { perimeterLayerGroup.addTo(map); } else { map.removeLayer(perimeterLayerGroup); }
@@ -429,20 +491,20 @@
 
       findZone(lat, lon, (zone) => {
         if (zone && zone.risk) {
-          resultZone.textContent = zone.risk + ' hazard';
+          resultZone.textContent = zone.risk + ' hazard (Washoe)';
           resultZone.style.background = zoneColors[zone.risk] || '#8b8377';
           marker.bindPopup(`<b>${m.matchedAddress}</b>${zone.risk} hazard${zone.acres ? ' &mdash; zone area ' + Math.round(zone.acres).toLocaleString() + ' acres' : ''}`).openPopup();
         } else {
-          resultZone.textContent = 'No rating on file';
+          resultZone.textContent = 'No Washoe rating here';
           resultZone.style.background = '#8b8377';
-          marker.bindPopup(`<b>${m.matchedAddress}</b>No Fire Risk Rating polygon found at this exact point.`).openPopup();
+          marker.bindPopup(`<b>${m.matchedAddress}</b>No Washoe County rating at this point. Check the national Wildfire Hazard Potential layer on the map for a visual reference here.`).openPopup();
         }
       });
 
       statusEl.textContent = 'Match found.';
       statusEl.className = '';
     } catch (e) {
-      statusEl.textContent = 'Lookup failed \u2014 the Census geocoder may be temporarily unavailable.';
+      statusEl.textContent = 'Lookup failed — the Census geocoder may be temporarily unavailable.';
       statusEl.className = 'err';
     }
     goBtn.disabled = false;
