@@ -162,7 +162,7 @@
 <header>
   <h1>Washoe County Fire Risk Lookup</h1>
   <p class="sub">Type an address to see its wildfire hazard designation and nearby fire history.</p>
-  <p style="font-size:12px; color:var(--muted); margin:-12px 0 18px; line-height:1.4;">Address search covers Washoe County only. The map itself also shows wildfire hazard statewide as a visual layer, built on Washoe County's own Fire Risk Rating data, the U.S. Forest Service's national Wildfire Hazard Potential layer, and NIFC's live fire perimeter service.</p>
+  <p style="font-size:12px; color:var(--muted); margin:-12px 0 18px; line-height:1.4;">Address search covers Washoe County only. The map itself also shows wildfire hazard statewide as a visual layer, built on Washoe County's own Fire Risk Rating data, the U.S. Forest Service's national Wildfire Hazard Potential layer, and NIFC's fire perimeter records.</p>
   <div class="searchbar">
     <input id="addr" type="text" placeholder="e.g. 5000 Cold Springs Rd, Reno, NV" />
     <button id="go">Look up</button>
@@ -180,6 +180,10 @@
     <label class="toggle-row"><input type="checkbox" id="toggleRecent" checked> Hawk, Bug & Stallion fires</label>
     <label class="toggle-row"><input type="checkbox" id="toggleHistory"> Historical fire perimeters</label>
     <div style="font-size:11.5px; color:var(--muted); margin:-4px 0 10px 23px; line-height:1.4;">Loads on first check &mdash; covers past decades, may take a moment.</div>
+    <div style="margin:0 0 10px 23px;">
+      <input id="fireSearchInput" type="text" placeholder="Find a fire from the last 10 years" style="width:100%; padding:6px 8px; font-size:12.5px; border:1px solid var(--line); font-family:-apple-system, 'Segoe UI', sans-serif;">
+      <div id="fireSearchStatus" style="font-size:11px; color:var(--muted); margin-top:4px; min-height:14px;"></div>
+    </div>
 
     <h2 style="margin-top:18px;">Legend</h2>
     <div id="washoeLegend">
@@ -193,8 +197,15 @@
       <div style="font-size:12px; font-weight:600; color:var(--ink); margin:10px 0 6px;">National (USFS)</div>
       <div id="nationalLegend"></div>
     </div>
-    <div class="legend-item"><span class="swatch" style="background:#c1502e; border:1.5px solid #7a3a24;"></span> Hawk, Bug &amp; Stallion fires</div>
-    <div class="legend-item"><span class="swatch" style="background:#5b4636; border-color:#5b4636"></span> Historical fire perimeter</div>
+    <div class="legend-item" id="recentFiresLegend"><span class="swatch" style="background:#c1502e; border:1.5px solid #7a3a24;"></span> Hawk, Bug &amp; Stallion fires</div>
+    <div id="historyLegend" style="display:none;">
+      <div style="font-size:11.5px; color:var(--muted); margin:4px 0 4px;">Historical fire perimeters, by age:</div>
+      <div class="legend-item"><span class="swatch" style="background:rgba(122,31,61,0.50); border-color:#7a1f3d"></span> This year</div>
+      <div class="legend-item"><span class="swatch" style="background:rgba(122,31,61,0.40); border-color:#7a1f3d"></span> ~10 years ago</div>
+      <div class="legend-item"><span class="swatch" style="background:rgba(122,31,61,0.31); border-color:#7a1f3d"></span> ~20 years ago</div>
+      <div class="legend-item"><span class="swatch" style="background:rgba(122,31,61,0.12); border-color:#7a1f3d"></span> 40+ years ago</div>
+      <div style="font-size:11px; color:var(--muted); margin:2px 0 10px; line-height:1.4; font-style:italic;">Where perimeters overlap, colors stack and look darker regardless of age &mdash; that's overlapping fires, not necessarily a more recent one.</div>
+    </div>
     <div id="layerWarning" style="display:none; margin-top:14px; padding:10px; background:#f4d9d0; border:1px solid var(--accent-dark); font-size:12px; color:var(--accent-dark); line-height:1.4;">
       The Fire Risk Rating layer couldn't load from Washoe County's server. The rest of the map (search, fire perimeters) still works.
     </div>
@@ -205,14 +216,12 @@
     </div>
 
     <div class="note">
-      <b>Live data.</b> Fire Risk Rating comes directly from Washoe County's own GIS server (layer ID 96, "Fire Risk Rating," under Accela/AccelaWashoe) and covers only Washoe County addresses. Wildfire Hazard Potential is the U.S. Forest Service's national layer (2024 edition) &mdash; shown as a visual reference for the rest of the state, but not wired into the address search since its values aren't meant for exact point lookups. Hawk, Bug, and Stallion fire perimeters come from NIFC's WFIGS Year-to-Date service, the real official boundaries (slightly simplified for file size).
+      Sources: Washoe County GIS (Fire Risk Rating, current), U.S. Forest Service (Wildfire Hazard Potential, national, 2024 edition), NIFC WFIGS (Hawk, Bug &amp; Stallion perimeters, as of Sept. 2026), NIFC WFIGS (historical perimeters, all years), U.S. Census Bureau (address geocoding, current).
+      <br><br>
+      By Piper Heath
     </div>
   </div>
 </div>
-
-<footer>
-  Address search: U.S. Census Bureau Geocoder (free, public). Fire perimeters: NIFC WFIGS Interagency Fire Perimeters (public, updated every 5 minutes). Fire Risk Rating: Washoe County GIS, layer 96 (Accela/AccelaWashoe).
-</footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
@@ -367,6 +376,7 @@
 
   document.getElementById('toggleRecent').addEventListener('change', e => {
     if (e.target.checked) { recentFiresLayerGroup.addTo(map); } else { map.removeLayer(recentFiresLayerGroup); }
+    document.getElementById('recentFiresLegend').style.display = e.target.checked ? 'flex' : 'none';
   });
 
   // ---- Layer toggles ----
@@ -377,44 +387,217 @@
 
   // ---- Historical fire perimeters (NIFC, loaded on demand) ----
   const HISTORY_URL = "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/InterAgencyFirePerimeterHistory_All_Years_View/FeatureServer/0/query";
+  // Fills the gap the "All Years" archive has for recent fires (like Davis, 2024) —
+  // this one covers certified perimeters from 2021 onward, using different field names.
+  const RECENT_CERTIFIED_URL = "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Interagency_Perimeters/FeatureServer/0/query";
   const historyLayerGroup = L.layerGroup();
   let historyLoaded = false;
+  let historyLoading = false;
+  const historyFeatureLayers = []; // { feature, layer } for every fire drawn, used for search
 
-  document.getElementById('toggleHistory').addEventListener('change', e => {
-    if (!e.target.checked) { map.removeLayer(historyLayerGroup); return; }
+  const currentYear = new Date().getFullYear();
+  // Darker/more opaque for recent fires, lighter for older ones.
+  function styleByAge(year) {
+    const age = Math.max(0, currentYear - (parseInt(year, 10) || currentYear));
+    const cappedAge = Math.min(age, 40); // 40+ years all look the same, lightest
+    const fillOpacity = 0.50 - (cappedAge / 40) * 0.38; // 0.50 down to 0.12
+    const lineOpacity = 0.95 - (cappedAge / 40) * 0.55; // 0.95 down to 0.40
+    return { color: '#7a1f3d', weight: 1, fillColor: '#7a1f3d', fillOpacity, opacity: lineOpacity, dashArray: '2 3' };
+  }
 
-    if (historyLoaded) { historyLayerGroup.addTo(map); return; }
+  // Normalize a feature from either service into a common shape: properties
+  // with INCIDENT, FIRE_YEAR, GIS_ACRES, regardless of which source it came from.
+  function normalizeFeature(f, source) {
+    if (source === 'certified') {
+      const p = f.properties;
+      const year = p.attr_FireDiscoveryDateTime ? new Date(p.attr_FireDiscoveryDateTime).getFullYear() : null;
+      return {
+        type: 'Feature',
+        geometry: f.geometry,
+        properties: {
+          INCIDENT: p.poly_IncidentName,
+          FIRE_YEAR: year,
+          GIS_ACRES: p.poly_GISAcres
+        }
+      };
+    }
+    return f; // already in INCIDENT/FIRE_YEAR/GIS_ACRES shape
+  }
 
-    const historyParams = new URLSearchParams({
-      where: "1=1",
-      outFields: "INCIDENT,FIRE_YEAR,GIS_ACRES",
+  function loadHistoricalFires(onDone) {
+    if (historyLoaded) { onDone(); return; }
+    if (historyLoading) { setTimeout(() => loadHistoricalFires(onDone), 300); return; }
+    historyLoading = true;
+
+    const bboxGeom = {
       geometry: "-120.1,39.0,-119.4,40.0",
       geometryType: "esriGeometryEnvelope",
       inSR: "4326",
       spatialRel: "esriSpatialRelIntersects",
       outSR: "4326",
       f: "geojson"
-    });
+    };
 
-    fetch(`${HISTORY_URL}?${historyParams.toString()}`)
-      .then(r => r.json())
-      .then(data => {
-        if (data.features && data.features.length) {
-          L.geoJSON(data, {
-            style: { color: '#5b4636', weight: 1, fillColor: '#5b4636', fillOpacity: 0.09, dashArray: '2 3' },
-            onEachFeature: (f, layer) => {
-              const p = f.properties;
-              layer.bindPopup(`<b>${p.INCIDENT || 'Unnamed fire'} (${p.FIRE_YEAR || '?'})</b>${p.GIS_ACRES ? Math.round(p.GIS_ACRES).toLocaleString() + ' acres' : ''}`);
+    const historyParams = new URLSearchParams({ where: "1=1", outFields: "INCIDENT,FIRE_YEAR,GIS_ACRES", ...bboxGeom });
+    const certifiedParams = new URLSearchParams({ where: "1=1", outFields: "poly_IncidentName,poly_GISAcres,attr_FireDiscoveryDateTime", ...bboxGeom });
+
+    Promise.allSettled([
+      fetch(`${HISTORY_URL}?${historyParams.toString()}`).then(r => r.json()),
+      fetch(`${RECENT_CERTIFIED_URL}?${certifiedParams.toString()}`).then(r => r.json())
+    ]).then(([historyResult, certifiedResult]) => {
+      const allFeatures = [];
+
+      if (historyResult.status === 'fulfilled' && historyResult.value.features) {
+        allFeatures.push(...historyResult.value.features.map(f => normalizeFeature(f, 'archive')));
+      } else {
+        console.error('Could not load the All Years archive:', historyResult.reason);
+      }
+
+      if (certifiedResult.status === 'fulfilled' && certifiedResult.value.features) {
+        allFeatures.push(...certifiedResult.value.features.map(f => normalizeFeature(f, 'certified')));
+      } else {
+        console.error('Could not load the certified-since-2021 service:', certifiedResult.reason);
+      }
+
+      if (allFeatures.length) {
+        // Deduplicate: the same fire can appear in both services, or more than
+        // once within one service (different reporting agencies, slightly
+        // different acreage calculations, etc). Named fires are matched on name
+        // + year alone, ignoring acreage, since that's a much stronger
+        // identifier than an acreage figure that can vary slightly between
+        // sources. Unnamed fires fall back to a tolerance-based acreage match.
+        const namedSeen = new Map(); // key: name|year -> best feature so far
+        const unnamedKept = [];
+
+        allFeatures.forEach(f => {
+          const p = f.properties;
+          const name = (p.INCIDENT || '').trim().toLowerCase();
+          const acres = p.GIS_ACRES || 0;
+
+          if (name) {
+            const key = `${name}|${p.FIRE_YEAR}`;
+            const existing = namedSeen.get(key);
+            if (!existing || acres > (existing.properties.GIS_ACRES || 0)) {
+              namedSeen.set(key, f);
             }
-          }).addTo(historyLayerGroup);
+          } else {
+            const isDupe = unnamedKept.some(kept => {
+              const kp = kept.properties;
+              if (kp.FIRE_YEAR !== p.FIRE_YEAR) return false;
+              const kAcres = kp.GIS_ACRES || 0;
+              if (kAcres === 0 && acres === 0) return true;
+              return Math.abs(kAcres - acres) / Math.max(kAcres, acres, 1) < 0.02;
+            });
+            if (!isDupe) unnamedKept.push(f);
+          }
+        });
+
+        const deduped = [...namedSeen.values(), ...unnamedKept];
+        // Draw biggest fires first, smallest last, so small fires render on
+        // top and stay clickable instead of getting buried under a huge one.
+        deduped.sort((a, b) => (b.properties.GIS_ACRES || 0) - (a.properties.GIS_ACRES || 0));
+        let highlightedHistoryLayer = null;
+
+        function highlightHistoryLayer(layer, year) {
+          if (highlightedHistoryLayer && highlightedHistoryLayer !== layer) {
+            highlightedHistoryLayer.setStyle(styleByAge(highlightedHistoryLayer._wuiYear));
+          }
+          layer._wuiYear = year;
+          layer.setStyle({ color: '#f2b705', weight: 3, fillColor: '#f2b705', fillOpacity: 0.55, opacity: 1, dashArray: null });
+          layer.bringToFront();
+          highlightedHistoryLayer = layer;
         }
-        historyLoaded = true;
-        historyLayerGroup.addTo(map);
-      })
-      .catch(() => {
+
+        L.geoJSON({ type: 'FeatureCollection', features: deduped }, {
+          style: (f) => styleByAge(f.properties.FIRE_YEAR),
+          onEachFeature: (f, layer) => {
+            const p = f.properties;
+            const popupHtml = `<b>${p.INCIDENT || 'Unnamed fire'} (${p.FIRE_YEAR || '?'})</b>${p.GIS_ACRES ? Math.round(p.GIS_ACRES).toLocaleString() + ' acres' : ''}`;
+            layer.bindPopup(popupHtml);
+            historyFeatureLayers.push({ feature: f, layer });
+
+            layer.on('click', () => highlightHistoryLayer(layer, p.FIRE_YEAR));
+
+            // A small dot at the center, always clickable even when a fire's
+            // outline is completely buried under a bigger overlapping one —
+            // Leaflet always draws markers above shapes, regardless of stacking.
+            const center = layer.getBounds().getCenter();
+            const dot = L.marker(center, {
+              icon: L.divIcon({
+                className: '',
+                html: '<div style="width:14px;height:14px;opacity:0;"></div>',
+                iconSize: [14, 14],
+                iconAnchor: [7, 7]
+              })
+            });
+            dot.bindPopup(popupHtml);
+            dot.on('click', () => highlightHistoryLayer(layer, p.FIRE_YEAR));
+            dot.addTo(historyLayerGroup);
+          }
+        }).addTo(historyLayerGroup);
+      }
+
+      historyLoaded = true;
+      historyLoading = false;
+      onDone();
+    });
+  }
+
+  document.getElementById('toggleHistory').addEventListener('change', e => {
+    document.getElementById('historyLegend').style.display = e.target.checked ? 'block' : 'none';
+    if (!e.target.checked) { map.removeLayer(historyLayerGroup); return; }
+    loadHistoricalFires((err) => {
+      if (!err) historyLayerGroup.addTo(map);
+      else {
         e.target.checked = false;
         alert('Historical fire perimeters could not be loaded right now.');
+      }
+    });
+  });
+
+  // ---- Search fires by name, last 10 years only ----
+  const fireSearchInput = document.getElementById('fireSearchInput');
+  const fireSearchStatus = document.getElementById('fireSearchStatus');
+
+  function runFireSearch() {
+    const query = fireSearchInput.value.trim().toLowerCase();
+    if (!query) { fireSearchStatus.textContent = ''; return; }
+
+    fireSearchStatus.textContent = 'Searching...';
+
+    loadHistoricalFires((err) => {
+      if (err) { fireSearchStatus.textContent = 'Could not load fire data.'; return; }
+
+      // Turn the layer + toggle on so results are actually visible.
+      const toggle = document.getElementById('toggleHistory');
+      if (!toggle.checked) {
+        toggle.checked = true;
+        toggle.dispatchEvent(new Event('change'));
+      }
+
+      const cutoffYear = currentYear - 10;
+      const matches = historyFeatureLayers.filter(({ feature }) => {
+        const p = feature.properties;
+        const name = (p.INCIDENT || '').toLowerCase();
+        const year = parseInt(p.FIRE_YEAR, 10) || 0;
+        return name === query && year >= cutoffYear;
       });
+
+      if (!matches.length) {
+        fireSearchStatus.textContent = `No fires from the last 10 years match "${fireSearchInput.value.trim()}".`;
+        return;
+      }
+
+      fireSearchStatus.textContent = `${matches.length} match${matches.length > 1 ? 'es' : ''} found.`;
+
+      const group = L.featureGroup(matches.map(m => m.layer));
+      map.fitBounds(group.getBounds(), { padding: [40, 40] });
+      matches[0].layer.openPopup();
+    });
+  }
+
+  document.getElementById('fireSearchInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') runFireSearch();
   });
 
   // ---- Point lookup against the real Washoe County layer (via JSONP) ----
